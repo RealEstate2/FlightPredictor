@@ -31,22 +31,26 @@ from line_profiler import LineProfiler
 
 
 def input_parameters():
-    timestep = 1 #s
+    timestep = 0.7 #s
     max_time = 3600*8 #s
     iter_max = int(np.floor(max_time/timestep))
 
     return {
-        "launch_time": "2025-10-18 00:00",
+        "launch_time": "2025-10-18 18:00",
         "latitude": 40.4462,
         "longitude": -104.6379,
         "altitude": 1500,
         "balloon_mass": 0.6,
         "burst_diameter": 6.0,
-        "helium_volume": 2.78,
-        "payload_mass": 1.9,
+        #"helium_volume": 2,
+        "neck_lift": 2.05,
+        "payload_mass": 1.85,
         "time_step": timestep,
         "iter_max":iter_max,
-        "DataSet":"gfs"
+        "DataSet":"gfs",
+        "parachute_cd":0.6,
+        "parachute_mass":0.1,
+        "parachute_diameter":1
     }
 
 
@@ -73,6 +77,11 @@ class BalloonState:
         self.long = p["longitude"]
         self.position = np.array([0.0, 0.0, p["altitude"]])
 
+        self.parachute_cd = p["parachute_cd"]
+        self.parachute_mass = p["parachute_mass"]
+        self.parachute_diameter = p["parachute_diameter"]
+        self.parachute_area = self.parachute_diameter**2*np.pi/4
+
         self.velocity = np.zeros(3)
         
         #Atmospheric Conditions
@@ -84,8 +93,18 @@ class BalloonState:
         self.g = g
 
         self.rho_He = He_density(self.P_air, self.T_air)
-        
-        self.volume_He = p["helium_volume"]
+        rho_diff = (self.rho_air - self.rho_He)
+
+        #When Neck lift is attained
+        self.neck_lift = p["neck_lift"] #In units Kg of Force
+        total_force = (self.neck_lift+p["balloon_mass"])
+
+
+        self.volume_He = total_force/rho_diff
+
+        #When Fill is Controlled
+        #self.volume_He = p["helium_volume"]
+
         self.diameter  = (6*self.volume_He/np.pi)**(1/3)
         self.CSA = np.pi/4*self.diameter**2
         self.mass_He = self.volume_He*self.rho_He
@@ -96,10 +115,11 @@ class BalloonState:
             p["balloon_mass"]
             + p["payload_mass"]
             + self.mass_He
+            + self.parachute_mass
         )
 
         self.F_weight = self.mass * self.g
-        self.Net_Lift = self.F_buoyant - self.F_weight
+        self.Net_Lift = self.F_buoyant - self.F_weight 
 
     def update_state(self,atmosphere):
         # Atmospheric Conditions at current altitude [m]
@@ -111,6 +131,8 @@ class BalloonState:
         self.rho_air = rho
         self.g       = g
 
+        #self.T_air = atmosphere.temp
+        #self.rho_air = self.P_air/(287*self.T_air)
 
         # Helium properties (assuming He_density(P [Pa], T [K]))
         self.rho_He = He_density(self.P_air, self.T_air)
@@ -125,14 +147,10 @@ class BalloonState:
 
 
     def report(self):
+        
 
-        speed = np.linalg.norm(self.velocity)
-
-        print("\n========= BALLOON FLIGHT REPORT =========")
-        print(f"Simulated Time    : {self.t_sim:10.1f} s")
-        print(f"Altitude          : {self.position[2]:10.2f} m")
-
-        print("\n--- Atmospheric State ---")
+        print("\n========= PRE FLIGHT REPORT =========")
+        print("\n--- Initial Atmospheric State ---")
         print(f"Temperature       : {self.T_air:10.2f} K")
         print(f"Pressure          : {self.P_air:10.2f} Pa")
         print(f"Density           : {self.rho_air:10.4f} kg/m³")
@@ -141,20 +159,18 @@ class BalloonState:
         print("\n--- Balloon System ---")
         print(f"Helium Density    : {self.rho_He:10.4f} kg/m³")
         print(f"Helium Volume     : {self.volume_He:10.3f} m³")
-        print("Ballon Diameter i  :",self.diameter)
+        print( "Balloon Neck Lift :",self.neck_lift, "kgF")
+        print( "Ballon Diameter i :",self.diameter, "m")
         print(f"Helium Mass       : {self.mass_He:10.3f} kg")
+        print( "Balloon Mass      :",self.params["balloon_mass"])
+        print( "Payload Mass      :",self.params["payload_mass"]+self.params["parachute_mass"])
+
         print(f"Total Mass        : {self.mass:10.3f} kg")
 
         print("\n--- Forces ---")
         print(f"Buoyancy Force    : {self.F_buoyant:10.3f} N")
         print(f"Weight Force      : {self.F_weight:10.3f} N")
         print(f"Net Vertical      : {self.Net_Lift:10.3f} N")
-
-        print("\n--- Kinematics ---")
-        print("Ascent Rate       :",self.Net_Lift/self.mass)
-        print(f"Velocity Vector   : {self.velocity}")
-        print(f"Speed             : {speed:10.3f} m/s")
-        print(f"Position Vector   : {self.position}")
 
         print("========================================")
     
@@ -220,11 +236,11 @@ def compute_lift(balloon, atm):
     """
 
     # --- Build air velocity vector ---
-    w_vel = atm.wvel / (balloon.rho_air * balloon.g)    # Pa/s → m/s
+    w_vel = -1*atm.wvel / (balloon.rho_air * balloon.g)    # Pa/s → m/s
     wind_vel = np.array([atm.uvel, atm.vvel, w_vel])
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
     # --- Relative velocity ---
-    v_rel = wind_vel - balloon.velocity
+    v_rel = (wind_vel - balloon.velocity)
     speed = np.linalg.norm(v_rel) + 1e-12      # avoid div by zero
     direction = v_rel / speed
 
@@ -251,6 +267,33 @@ def compute_lift(balloon, atm):
     a_net = F_net / balloon.mass
 
     return F_net, a_net
+
+def compute_fall(balloon, atm):
+    # --- Build air velocity vector ---
+    w_vel = -1*atm.wvel / (balloon.rho_air * balloon.g)    # Pa/s → m/s
+    wind_vel = np.array([atm.uvel, atm.vvel, w_vel])
+
+    # --- Relative velocity ---
+    v_rel = wind_vel-balloon.velocity 
+    speed = np.linalg.norm(v_rel) + 1e-12      # avoid div by zero
+    direction = v_rel / speed
+
+    Cd = balloon.parachute_cd
+    D_mag = 0.5 * Cd * balloon.rho_air * balloon.parachute_diameter * speed**2
+
+    F_drag = D_mag * direction
+
+    # --- Weight ---
+    F_weight = np.array([0, 0, -balloon.mass * balloon.g])
+
+    # --- Net force ---
+    F_net = F_drag + F_weight
+
+    # --- Acceleration ---
+    a_net = F_net / balloon.mass
+
+    return F_net, a_net
+
 
 def rk4_step(balloon, a_net):
     dt = balloon.timestep
@@ -363,10 +406,10 @@ def Simulation():
         if balloon.diameter > burst_d:
             break
         
-        F_net, a_net = compute_lift(balloon,atmosphere)
+        
         
         #Compute Current Set of Forces
-        
+        F_net, a_net = compute_lift(balloon,atmosphere)
 
         #Update Position During Step Based on Velocity and Acceleration
         rk4_step(balloon,a_net)
@@ -375,29 +418,82 @@ def Simulation():
         pos_log = np.vstack((pos_log,balloon.position))
         vel_log = np.vstack((vel_log,balloon.velocity))
 
-        #Relative Motion Since Start
-        dx = balloon.position[0]
-        dy = balloon.position[1]
+        #Change is position from this iteration to last
+        d_pos= pos_log[iter] - pos_log[iter - 1]
+        dx = d_pos[0]
+        dy = d_pos[1]
 
-        #Store Relative Motion as Degree Change to Balloon
-        balloon.lat,balloon.long = relative_to_latlon(lat_0,long_0,dx,dy)
+        #Update Position Change to Balloon Coordinate Change
+        balloon.lat,balloon.long = relative_to_latlon(balloon.lat,balloon.long,dx,dy)
         #Store Relative Motion in Coord Log
         coord_log = np.vstack((coord_log,[balloon.lat,balloon.long,balloon.position[2]]))
 
         #Recompute Atmospheric Conditions
         balloon.t_sim = iter* balloon.timestep
         atmosphere.sample_update(balloon.lat,balloon.long,balloon.position[2],balloon.t_sim)
-        balloon.update_state()
+        balloon.update_state(atmosphere)
+
+
+    print("================Burst Report===================")
+    print("Average Ascent[m/s]:",(balloon.position[2]-balloon.params["altitude"])/balloon.t_sim)
+    print("Max Altitude[m]    :",balloon.position[2])
+    print("Burst Coords       :",balloon.lat,balloon.long)
+    print("Burst Time[s]      :",balloon.t_sim )
+    hr = np.floor(balloon.t_sim/3600)
+    min = np.floor((balloon.t_sim-hr*3600)/60)
+    sec = np.floor((balloon.t_sim-min*60))
+    print("Burst Time[Hr-M-S] :",hr,"-",min,"-",sec)
+    print("Final Pressure[Pa] :",balloon.P_air)
+    print("Final Diameter     :",balloon.diameter)
+
+    iter_burst = iter
+    burst_time = balloon.t_sim
+    burst_pos =  balloon.lat,balloon.long,balloon.position[2]
+
+    #Descent
+    for iter in range(iter_burst,iter_max):
+        if balloon.position[2] < 1500:
+            break
+        
+        #Compute Current Set of Forces
+        F_net, a_net = compute_fall(balloon,atmosphere)
+
+        #Update Position During Step Based on Velocity and Acceleration
+        rk4_step(balloon,a_net)
+
+        #Log Position After Step
+        pos_log = np.vstack((pos_log,balloon.position))
+        vel_log = np.vstack((vel_log,balloon.velocity))
+
+        #Change is position from this iteration to last
+        d_pos= pos_log[iter] - pos_log[iter - 1]
+        dx = d_pos[0]
+        dy = d_pos[1]
+
+        #Update Position Change to Balloon Coordinate Change
+        balloon.lat,balloon.long = relative_to_latlon(balloon.lat,balloon.long,dx,dy)
+        #Store Relative Motion in Coord Log
+        coord_log = np.vstack((coord_log,[balloon.lat,balloon.long,balloon.position[2]]))
+
+        #Recompute Atmospheric Conditions
+        balloon.t_sim = iter* balloon.timestep
+        atmosphere.sample_update(balloon.lat,balloon.long,balloon.position[2],balloon.t_sim)
+        balloon.update_state(atmosphere)
+
+    print("==============Landing Report===================")
+    print("Average Descent[m/s] :",(balloon.position[2]-burst_pos[2])/(balloon.t_sim-burst_time))
+    print("Final Altitude[m]    :",balloon.position[2])
+    print("Burst Coords         :",balloon.lat,balloon.long)
+    print("Impact Velocity [m/s]:",balloon.velocity)
+    print("Final Pressure[Pa]   :",balloon.P_air)
+    print("Landing Time[s]      :",balloon.t_sim )
+    hr = np.floor(balloon.t_sim/3600)
+    min = np.floor((balloon.t_sim-hr*3600)/60)
+    sec = np.floor((balloon.t_sim-min*60))
+    print("Burst Time[Hr-M-S]   :",hr,"-",min,"-",sec)
 
     time_f = time.time()
-
-    print("Average Ascent[m/s]:",(balloon.position[2]-balloon.params["altitude"])/balloon.t_sim)
-    print("Max Altitude[m]:",balloon.position[2])
-    print("Final Coords",balloon.lat,balloon.long)
     print("Time To Run[s]:",time_f-time_i)
-    print("Final Pressure[Pa]:",balloon.P_air*0.01)
-    print("Final Diameter:",balloon.diameter)
-
 
     # Create iteration axis
     iters = np.arange(pos_log.shape[0])
@@ -453,8 +549,8 @@ def Simulation():
     # ---- Trajectory ----
     ax2.plot(
         lon, lat,
-        color="crimson",
-        linewidth=2.5,
+        color="blue",
+        linewidth=1,
         transform=ccrs.PlateCarree(),
         label="Trajectory"
     )
@@ -469,6 +565,17 @@ def Simulation():
         label="Launch"
     )
 
+    # ---- Burst marker ----
+    ax2.scatter(
+        burst_pos[1], burst_pos[0],
+        marker="X",
+        color="red",
+        s=80,
+        transform=ccrs.PlateCarree(),
+        label="Burst"
+    )
+
+
     # ---- Final position ----
     ax2.scatter(
         lon[-1], lat[-1],
@@ -476,7 +583,7 @@ def Simulation():
         color="lime",
         s=60,
         transform=ccrs.PlateCarree(),
-        label="Burst / Final"
+        label="Landing Final"
     )
 
     ax2.set_title("Balloon Ground Track (Local Scale Map)")

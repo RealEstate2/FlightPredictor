@@ -1,0 +1,507 @@
+# ===========================================
+# HIGH ALTITUDE BALLOON FLIGHT MODEL
+# ===========================================
+
+import numpy as np
+from func_lookup import He_density, air_density, air_dynamic_viscosity, Cd_sphere
+from HRRRSlicer import Slice_HRRR
+from GFSSlicer import Slice_GFS
+
+from atmosphere import standardAtmosphere
+import matplotlib.pyplot as plt
+
+from herbie import Herbie
+import xarray as xr
+import time
+
+
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import cartopy.io.img_tiles as cimgt
+
+from line_profiler import LineProfiler
+
+
+# ====================================================
+# 1. USER INPUTS
+# ====================================================
+#CSU-CHILL COordinates
+#"latitude": 40.4462,
+#"longitude": -104.6379,
+
+
+def input_parameters():
+    timestep = 1 #s
+    max_time = 3600*8 #s
+    iter_max = int(np.floor(max_time/timestep))
+
+    return {
+        "launch_time": "2025-10-18 00:00",
+        "latitude": 40.4462,
+        "longitude": -104.6379,
+        "altitude": 1500,
+        "balloon_mass": 0.6,
+        "burst_diameter": 6.0,
+        "helium_volume": 2.78,
+        "payload_mass": 1.9,
+        "time_step": timestep,
+        "iter_max":iter_max,
+        "DataSet":"gfs"
+    }
+
+
+# ====================================================
+# 2. INITIAL CONDITIONS @ SURFACE
+# ====================================================
+class BalloonState:
+
+    def __init__(self, params):
+        self.params = params
+        self.init_state()
+
+
+    def init_state(self):
+
+        p = self.params
+
+        self.timestep = p["time_step"] #s
+        self.t_sim = 0
+        self.t_real = p["launch_time"]
+        self.iter_max = p["iter_max"]
+
+        self.lat = p["latitude"]
+        self.long = p["longitude"]
+        self.position = np.array([0.0, 0.0, p["altitude"]])
+
+        self.velocity = np.zeros(3)
+        
+        #Atmospheric Conditions
+        P, T, rho, g = standardAtmosphere.qualities(p["altitude"])
+
+        self.P_air = P*1000
+        self.T_air = T
+        self.rho_air = rho
+        self.g = g
+
+        self.rho_He = He_density(self.P_air, self.T_air)
+        
+        self.volume_He = p["helium_volume"]
+        self.diameter  = (6*self.volume_He/np.pi)**(1/3)
+        self.CSA = np.pi/4*self.diameter**2
+        self.mass_He = self.volume_He*self.rho_He
+
+        self.F_buoyant = self.rho_air * self.g * self.volume_He
+
+        self.mass = (
+            p["balloon_mass"]
+            + p["payload_mass"]
+            + self.mass_He
+        )
+
+        self.F_weight = self.mass * self.g
+        self.Net_Lift = self.F_buoyant - self.F_weight
+
+    def update_state(self,atmosphere):
+        # Atmospheric Conditions at current altitude [m]
+        P_kPa, T, rho, g = standardAtmosphere.qualities(self.position[2])
+
+        # Convert and store
+        self.P_air  = P_kPa * 1000.0   # Pa
+        self.T_air  = T
+        self.rho_air = rho
+        self.g       = g
+
+
+        # Helium properties (assuming He_density(P [Pa], T [K]))
+        self.rho_He = He_density(self.P_air, self.T_air)
+        self.volume_He = self.mass_He / self.rho_He
+        self.diameter  = (6 * self.volume_He / np.pi)**(1/3)
+        self.CSA       = np.pi / 4 * self.diameter**2
+
+        # Forces
+        self.F_buoyant = self.rho_air * self.g * self.volume_He
+        self.F_weight  = self.mass * self.g
+        self.Net_Lift  = self.F_buoyant - self.F_weight
+
+
+    def report(self):
+
+        speed = np.linalg.norm(self.velocity)
+
+        print("\n========= BALLOON FLIGHT REPORT =========")
+        print(f"Simulated Time    : {self.t_sim:10.1f} s")
+        print(f"Altitude          : {self.position[2]:10.2f} m")
+
+        print("\n--- Atmospheric State ---")
+        print(f"Temperature       : {self.T_air:10.2f} K")
+        print(f"Pressure          : {self.P_air:10.2f} Pa")
+        print(f"Density           : {self.rho_air:10.4f} kg/m³")
+        print(f"Gravity           : {self.g:10.5f} m/s²")
+
+        print("\n--- Balloon System ---")
+        print(f"Helium Density    : {self.rho_He:10.4f} kg/m³")
+        print(f"Helium Volume     : {self.volume_He:10.3f} m³")
+        print("Ballon Diameter i  :",self.diameter)
+        print(f"Helium Mass       : {self.mass_He:10.3f} kg")
+        print(f"Total Mass        : {self.mass:10.3f} kg")
+
+        print("\n--- Forces ---")
+        print(f"Buoyancy Force    : {self.F_buoyant:10.3f} N")
+        print(f"Weight Force      : {self.F_weight:10.3f} N")
+        print(f"Net Vertical      : {self.Net_Lift:10.3f} N")
+
+        print("\n--- Kinematics ---")
+        print("Ascent Rate       :",self.Net_Lift/self.mass)
+        print(f"Velocity Vector   : {self.velocity}")
+        print(f"Speed             : {speed:10.3f} m/s")
+        print(f"Position Vector   : {self.position}")
+
+        print("========================================")
+    
+
+
+class AtmosphereState:
+    def __init__(self, params):
+        self.params = params
+        self.sample_init()
+
+    def sample_init(self):
+        p = self.params
+        LAT = p["latitude"]
+        LONG = p["longitude"]
+        ALT_I = p["altitude"]
+        DT_I = p["launch_time"]
+
+        dataset= p["DataSet"]
+        if  dataset == "gfs":
+            u,v,w,z,T = Slice_GFS(LAT,LONG,ALT_I,0,DT_I)
+        elif dataset == "hrrr":
+            u,v,w,z,T = Slice_HRRR(LAT,LONG,ALT_I,0,DT_I)
+        else:
+            print("No Dataset Selected")
+
+        self.uvel = u
+        self.vvel = v
+        self.wvel = w
+        self.gh = z
+        self.temp = T
+
+        
+    
+    def sample_update(self,LAT,LONG,ALT,dt):
+        p = self.params
+        DT_I = p["launch_time"]
+
+        dataset= p["DataSet"]
+        if  dataset == "gfs":
+            u,v,w,z,T = Slice_GFS(LAT,LONG,ALT,0,DT_I)
+        elif dataset == "hrrr":
+            u,v,w,z,T = Slice_HRRR(LAT,LONG,ALT,0,DT_I)
+        
+
+        self.uvel = u
+        self.vvel = v
+        self.wvel = w
+        self.gh = z
+        self.temp = T
+
+
+def compute_lift(balloon, atm):
+    """
+    Compute net force and acceleration acting on the balloon.
+
+    Inputs:
+        balloon : BalloonState instance
+        atm     : AtmosphereState instance (returned by Slice or similar)
+
+    Returns:
+        F_net : np.array(3,)
+        a_net : np.array(3,)
+    """
+
+    # --- Build air velocity vector ---
+    w_vel = atm.wvel / (balloon.rho_air * balloon.g)    # Pa/s → m/s
+    wind_vel = np.array([atm.uvel, atm.vvel, w_vel])
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+    # --- Relative velocity ---
+    v_rel = wind_vel - balloon.velocity
+    speed = np.linalg.norm(v_rel) + 1e-12      # avoid div by zero
+    direction = v_rel / speed
+
+    # --- Fluid properties ---
+    mu = air_dynamic_viscosity(atm.temp)
+
+    # --- Reynolds number & Drag ---
+    Re = balloon.diameter * speed / mu
+    Cd = Cd_sphere(Re)
+
+    D_mag = 0.5 * Cd * balloon.rho_air * balloon.CSA * speed**2
+    F_drag = D_mag * direction
+
+    # --- Buoyancy ---
+    F_buoy = np.array([0, 0, balloon.rho_air * balloon.g * balloon.volume_He])
+
+    # --- Weight ---
+    F_weight = np.array([0, 0, -balloon.mass * balloon.g])
+
+    # --- Net force ---
+    F_net = F_drag + F_buoy + F_weight
+
+    # --- Acceleration ---
+    a_net = F_net / balloon.mass
+
+    return F_net, a_net
+
+def rk4_step(balloon, a_net):
+    dt = balloon.timestep
+
+    # --- current state vectors ---
+    x0 = balloon.position.copy()
+    v0 = balloon.velocity.copy()
+
+    # --- derivatives ---
+    def dxdt(v): return v
+    def dvdt(): return a_net   # acceleration is constant per step for now
+
+    # ---- RK4 VECTORS ----
+    k1x = dxdt(v0)
+    k1v = dvdt()
+
+    k2x = dxdt(v0 + 0.5 * dt * k1v)
+    k2v = dvdt()
+
+    k3x = dxdt(v0 + 0.5 * dt * k2v)
+    k3v = dvdt()
+
+    k4x = dxdt(v0 + dt * k3v)
+    k4v = dvdt()
+
+    # ---- UPDATE STATE ----
+    balloon.position += dt/6 * (k1x + 2*k2x + 2*k3x + k4x)
+    balloon.velocity += dt/6 * (k1v + 2*k2v + 2*k3v + k4v)
+
+    # Advance time
+    balloon.t_sim += dt
+
+    return balloon
+
+
+
+def relative_to_latlon(lat0_deg, lon0_deg, dx, dy):
+    """
+    Convert relative Cartesian motion (meters) to lat/lon coordinates.
+
+    Parameters:
+        lat0_deg : float
+            Initial latitude  (degrees)
+        lon0_deg : float
+            Initial longitude (degrees)
+        dx : float
+            Eastward displacement (meters)
+        dy : float
+            Northward displacement (meters)
+
+    Returns:
+        lat_deg, lon_deg : float
+            Updated latitude and longitude in degrees
+    """
+
+    # Earth's radius (meters)
+    R = 6371000.0
+
+    # Convert base to radians
+    lat0 = np.radians(lat0_deg)
+    lon0 = np.radians(lon0_deg)
+
+    # Latitude update
+    lat = lat0 + dy / R
+
+    # Longitude update (scaled by latitude)
+    lon = lon0 + dx / (R * np.cos(lat0))
+
+    # Convert back to degrees
+    lat_deg = np.degrees(lat)
+    lon_deg = np.degrees(lon)
+
+    return lat_deg, lon_deg
+
+
+def Simulation():
+    #Establish Initial Conditions
+    params = input_parameters()
+    balloon = BalloonState(params)
+    atmosphere = AtmosphereState(params)
+
+    burst_d = balloon.params["burst_diameter"]
+
+    print("Starting Altitude Entered:" , params["altitude"])
+    print("StartingPressure: ATM Model",balloon.P_air)
+    print("Starting Alttitude HRRR:", atmosphere.gh)
+
+    balloon.report()
+    if balloon.Net_Lift < 0:
+        return
+
+    #Ready Simulation to be Ran
+    iter_max = balloon.iter_max
+    #Empty position matricies
+    pos_log = np.zeros([3,iter_max])
+    coord_log = np.zeros([3,iter_max])
+
+    #Set Initial Position
+    pos_log = np.array(balloon.position)
+    #Set Initial Coordinates
+    lat_0,long_0 = balloon.params["latitude"],balloon.params["longitude"]
+    coord_log= np.array([lat_0,long_0,balloon.params["altitude"]])
+    #Set Initial Velocity
+    vel_log = np.array(balloon.velocity)
+
+    
+    time_i = time.time()
+    #Ascent
+    for iter in range(1,iter_max):
+        if balloon.diameter > burst_d:
+            break
+        
+        F_net, a_net = compute_lift(balloon,atmosphere)
+        
+        #Compute Current Set of Forces
+        
+
+        #Update Position During Step Based on Velocity and Acceleration
+        rk4_step(balloon,a_net)
+
+        #Log Position After Step
+        pos_log = np.vstack((pos_log,balloon.position))
+        vel_log = np.vstack((vel_log,balloon.velocity))
+
+        #Relative Motion Since Start
+        dx = balloon.position[0]
+        dy = balloon.position[1]
+
+        #Store Relative Motion as Degree Change to Balloon
+        balloon.lat,balloon.long = relative_to_latlon(lat_0,long_0,dx,dy)
+        #Store Relative Motion in Coord Log
+        coord_log = np.vstack((coord_log,[balloon.lat,balloon.long,balloon.position[2]]))
+
+        #Recompute Atmospheric Conditions
+        balloon.t_sim = iter* balloon.timestep
+        atmosphere.sample_update(balloon.lat,balloon.long,balloon.position[2],balloon.t_sim)
+        balloon.update_state()
+
+    time_f = time.time()
+
+    print("Average Ascent[m/s]:",(balloon.position[2]-balloon.params["altitude"])/balloon.t_sim)
+    print("Max Altitude[m]:",balloon.position[2])
+    print("Final Coords",balloon.lat,balloon.long)
+    print("Time To Run[s]:",time_f-time_i)
+    print("Final Pressure[Pa]:",balloon.P_air*0.01)
+    print("Final Diameter:",balloon.diameter)
+
+
+    # Create iteration axis
+    iters = np.arange(pos_log.shape[0])
+
+    # -----------------------
+    # FIGURE
+    # -----------------------
+    fig = plt.figure(figsize=(8, 6))
+    
+    # =======================
+    # ALTITUDE PROFILE
+    # =======================
+    ax1 = fig.add_subplot(2,2, 1)
+    ax1.plot(iters, pos_log[:,2], color="navy", linewidth=2)
+
+    ax1.set_xlabel("Iteration")
+    ax1.set_ylabel("Altitude (m)")
+    ax1.set_title("Vertical Profile")
+    ax1.grid(True)
+    
+
+    # =======================
+    # MAP BACKGROUND (LOCAL)
+    # =======================
+
+    # ---- Pick map source ----
+    # Mapbox / Stadia replacement for Stamen terrain
+    tiler = cimgt.OSM()
+
+    ax2 = fig.add_subplot(2,1,2, projection=tiler.crs)
+
+    # ---- Compute padded bounds ----
+    lat = coord_log[:,0]
+    lon = coord_log[:,1]
+
+    pad = 0.03  # zoom level padding
+    extent = [
+        lon.min() - pad,
+        lon.max() + pad,
+        lat.min() - pad,
+        lat.max() + pad
+    ]
+    ax2.set_extent(extent, crs=ccrs.PlateCarree())
+
+    # ---- Draw background tiles ----
+    ax2.add_image(tiler, 12)  # zoom 10–14: local scales
+
+    # ---- Overlays ----
+    ax2.add_feature(cfeature.STATES, linewidth=0.5)
+    ax2.add_feature(cfeature.BORDERS, linestyle=":")
+    ax2.coastlines(resolution="10m")
+
+    # ---- Trajectory ----
+    ax2.plot(
+        lon, lat,
+        color="crimson",
+        linewidth=2.5,
+        transform=ccrs.PlateCarree(),
+        label="Trajectory"
+    )
+
+    # ---- Launch marker ----
+    ax2.scatter(
+        lon[0], lat[0],
+        marker="X",
+        color="black",
+        s=80,
+        transform=ccrs.PlateCarree(),
+        label="Launch"
+    )
+
+    # ---- Final position ----
+    ax2.scatter(
+        lon[-1], lat[-1],
+        marker="o",
+        color="lime",
+        s=60,
+        transform=ccrs.PlateCarree(),
+        label="Burst / Final"
+    )
+
+    ax2.set_title("Balloon Ground Track (Local Scale Map)")
+    ax2.legend(loc="upper right")
+
+    ax3 = fig.add_subplot(2,2, 2)
+    ax3.plot(iters, vel_log[:,2], color="red", linewidth=2)
+
+    ax3.set_xlabel("Iteration")
+    ax3.set_ylabel("Vertical Velocity [m/s]")
+    ax3.set_title("Vertical Velocity Profile")
+    ax3.grid(True)
+
+    #plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+
+    Simulation()
+    '''
+    lp = LineProfiler()
+
+    lp.add_function(AtmosphereState.sample_update)
+    lp.add_function(Slice)   # recommended too
+
+    lp.run("Simulation()")
+    lp.print_stats()
+    '''

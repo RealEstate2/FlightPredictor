@@ -36,7 +36,7 @@ def input_parameters():
     iter_max = int(np.floor(max_time/timestep))
 
     return {
-        "launch_time": "2025-10-18 18:00",
+        "launch_time": "2025-10-18 12:00",
         "latitude": 40.4462,
         "longitude": -104.6379,
         "altitude": 1500,
@@ -48,13 +48,13 @@ def input_parameters():
         "time_step": timestep,
         "iter_max":iter_max,
         "DataSet":"gfs",
-        "parachute_cd":0.6,
+        "parachute_cd":1,
         "parachute_mass":0.1,
-        "parachute_diameter":1
+        "parachute_diameter":1.22
     }
 
 
-# ====================================================
+# ==================================================== 
 # 2. INITIAL CONDITIONS @ SURFACE
 # ====================================================
 class BalloonState:
@@ -369,9 +369,9 @@ def relative_to_latlon(lat0_deg, lon0_deg, dx, dy):
     return lat_deg, lon_deg
 
 
-def Simulation():
+def Simulation(params):
+
     #Establish Initial Conditions
-    params = input_parameters()
     balloon = BalloonState(params)
     atmosphere = AtmosphereState(params)
 
@@ -406,8 +406,6 @@ def Simulation():
         if balloon.diameter > burst_d:
             break
         
-        
-        
         #Compute Current Set of Forces
         F_net, a_net = compute_lift(balloon,atmosphere)
 
@@ -441,7 +439,7 @@ def Simulation():
     print("Burst Time[s]      :",balloon.t_sim )
     hr = np.floor(balloon.t_sim/3600)
     min = np.floor((balloon.t_sim-hr*3600)/60)
-    sec = np.floor((balloon.t_sim-min*60))
+    sec = np.floor((balloon.t_sim-hr*3600-min*60))
     print("Burst Time[Hr-M-S] :",hr,"-",min,"-",sec)
     print("Final Pressure[Pa] :",balloon.P_air)
     print("Final Diameter     :",balloon.diameter)
@@ -489,7 +487,7 @@ def Simulation():
     print("Landing Time[s]      :",balloon.t_sim )
     hr = np.floor(balloon.t_sim/3600)
     min = np.floor((balloon.t_sim-hr*3600)/60)
-    sec = np.floor((balloon.t_sim-min*60))
+    sec = np.floor((balloon.t_sim-hr*3600-min*60))
     print("Burst Time[Hr-M-S]   :",hr,"-",min,"-",sec)
 
     time_f = time.time()
@@ -529,7 +527,7 @@ def Simulation():
     lat = coord_log[:,0]
     lon = coord_log[:,1]
 
-    pad = 0.03  # zoom level padding
+    pad = 0.5  # zoom level padding
     extent = [
         lon.min() - pad,
         lon.max() + pad,
@@ -549,8 +547,8 @@ def Simulation():
     # ---- Trajectory ----
     ax2.plot(
         lon, lat,
-        color="blue",
-        linewidth=1,
+        color="crimson",
+        linewidth=2.5,
         transform=ccrs.PlateCarree(),
         label="Trajectory"
     )
@@ -565,7 +563,7 @@ def Simulation():
         label="Launch"
     )
 
-    # ---- Burst marker ----
+    # ---- Busrt marker ----
     ax2.scatter(
         burst_pos[1], burst_pos[0],
         marker="X",
@@ -575,7 +573,6 @@ def Simulation():
         label="Burst"
     )
 
-
     # ---- Final position ----
     ax2.scatter(
         lon[-1], lat[-1],
@@ -583,7 +580,7 @@ def Simulation():
         color="lime",
         s=60,
         transform=ccrs.PlateCarree(),
-        label="Landing Final"
+        label="Burst / Final"
     )
 
     ax2.set_title("Balloon Ground Track (Local Scale Map)")
@@ -599,16 +596,13 @@ def Simulation():
 
     #plt.tight_layout()
     plt.show()
+    
+    return balloon 
 
 if __name__ == "__main__":
+    params = input_parameters()
 
-    Simulation()
-    '''
-    lp = LineProfiler()
+    balloon = Simulation(params)
 
-    lp.add_function(AtmosphereState.sample_update)
-    lp.add_function(Slice)   # recommended too
 
-    lp.run("Simulation()")
-    lp.print_stats()
-    '''
+  

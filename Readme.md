@@ -68,7 +68,7 @@ Sutherland's Dynamic Viscocity Law
 
 CD for sphere Morrison-Style Drag
 Faith A. Morrison — Data Correlation for Drag Coefficient for Sphere (2013, Michigan Technological University)
-https://galileoandeinstein.phys.virginia.edu/more_stuff/Applets/Projectile/DataCorrelationForSphereDrag2013.pdf?utm_source=chatgpt.com
+https://galileoandeinstein.phys.virginia.edu/more_stuff/Applets/Projectile/DataCorrelationForSphereDrag2013.pdf
 
 
 CD Estimate for Parachute, RocketMan Parchutes do not give estimate for the Cd

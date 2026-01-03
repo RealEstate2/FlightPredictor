@@ -21,6 +21,7 @@ import cartopy.io.img_tiles as cimgt
 
 from line_profiler import LineProfiler
 
+lp = LineProfiler()
 
 # ====================================================
 # 1. USER INPUTS
@@ -36,14 +37,14 @@ def input_parameters():
     iter_max = int(np.floor(max_time/timestep))
 
     return {
-        "launch_time": "2025-10-18 12:00",
+        "launch_time": "2025-12-18 12:00",
         "latitude": 40.4462,
         "longitude": -104.6379,
         "altitude": 1500,
         "balloon_mass": 0.6,
         "burst_diameter": 6.0,
         #"helium_volume": 2,
-        "neck_lift": 2.05,
+        "neck_lift": 2,
         "payload_mass": 1.85,
         "time_step": timestep,
         "iter_max":iter_max,
@@ -421,7 +422,7 @@ def Simulation(params):
         dx = d_pos[0]
         dy = d_pos[1]
 
-        #Update Position Change to Balloon Coordinate Change
+        #Update Latitude and Longitude Change to Balloon 
         balloon.lat,balloon.long = relative_to_latlon(balloon.lat,balloon.long,dx,dy)
         #Store Relative Motion in Coord Log
         coord_log = np.vstack((coord_log,[balloon.lat,balloon.long,balloon.position[2]]))
@@ -495,7 +496,7 @@ def Simulation(params):
 
     # Create iteration axis
     iters = np.arange(pos_log.shape[0])
-
+    '''
     # -----------------------
     # FIGURE
     # -----------------------
@@ -516,7 +517,7 @@ def Simulation(params):
     # =======================
     # MAP BACKGROUND (LOCAL)
     # =======================
-
+    
     # ---- Pick map source ----
     # Mapbox / Stadia replacement for Stamen terrain
     tiler = cimgt.OSM()
@@ -595,14 +596,19 @@ def Simulation(params):
     ax3.grid(True)
 
     #plt.tight_layout()
-    plt.show()
-    
+    #plt.show()
+    '''
     return balloon 
 
 if __name__ == "__main__":
     params = input_parameters()
 
-    balloon = Simulation(params)
+    # profile the whole Simulation function
+    lp_wrapper = lp(Simulation)
+    balloon = lp_wrapper(params)
+
+    lp.print_stats()
+
 
 
   

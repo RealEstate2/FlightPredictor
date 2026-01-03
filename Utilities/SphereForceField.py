@@ -17,7 +17,7 @@ if LON < 0:
 SEARCH_RADIUS = 0.10   # degrees (~11 km box around LAT/LON)
 
 
-P = 825 #mb
+P = 825 #mb =
 PRESSURE_LEVEL = f"{P} mb"   # main level for horizontal flow
 P = P*100 #Pa
 

@@ -33,6 +33,15 @@ def _nearest_pressures(P_hPa):
     i = np.argsort(np.abs(levels - P_hPa))
     return levels[i[0]], levels[i[1]]
 
+def _nearest_time(hhmm):
+    times = np.array([
+        0000, 400,800, 1200, 1800
+        
+    ])
+    i = np.argsort(np.abs(times - hhmm))
+    return times[i[0]], times[i[1]]
+
+
 def _time_from_base(base_time_str, dt_sec):
     t0 = datetime.fromisoformat(base_time_str)
     t = t0 + timedelta(seconds=float(dt_sec))
@@ -56,6 +65,7 @@ def _fetch_slice(time_str, level_hPa):
         ds = xr.open_dataset(fname)
         _DATASET_CACHE[key] = ds
         return ds
+    
 
     print(f"🌍 Fetching GFS {level_hPa} mb @ {time_str}")
 
@@ -109,9 +119,7 @@ def _fetch_slice(time_str, level_hPa):
     _DATASET_CACHE[key] = ds
     return ds
 
-# ===============================
-# Nearest grid index
-# ===============================
+
 def _nearest_ij(ds, lat, lon, search_radius=15):
     """
     Find nearest index for BOTH:
@@ -136,13 +144,14 @@ def _nearest_ij(ds, lat, lon, search_radius=15):
         iy = np.argmin(np.abs(lat_arr - lat))
         ix = np.argmin(np.abs(lon_arr - lon))
         return iy, ix
-
+    
+    '''
     # ======================================
     # CASE 2: HRRR STYLE (2D curvilinear grid)
     # ======================================
     lat2d, lon2d = lat_arr, lon_arr
     ny, nx = lat2d.shape
-
+    
     if ds_id not in _LAST_IJ:
         dist2 = (lat2d - lat)**2 + (lon2d - lon)**2
         iy, ix = np.unravel_index(np.argmin(dist2), lat2d.shape)
@@ -167,83 +176,19 @@ def _nearest_ij(ds, lat, lon, search_radius=15):
     ix = j_min + sub_ix
 
     _LAST_IJ[ds_id] = (iy, ix)
-    return iy, ix
-def _nearest_ij(ds, lat, lon, search_radius=15):
-    """
-    Find nearest index for BOTH:
-    - Curvilinear grids (HRRR style lat[y,x])
-    - Rectilinear grids (GFS style lat[y], lon[x])
-    """
-
-    ds_id = id(ds)
-
-    # ---- Load or cache lat/lon ----
-    if ds_id in _LATLON_CACHE:
-        lat_arr, lon_arr = _LATLON_CACHE[ds_id]
-    else:
-        lat_arr = ds["latitude"].values
-        lon_arr = ds["longitude"].values
-        _LATLON_CACHE[ds_id] = (lat_arr, lon_arr)
-
-    # ======================================
-    # CASE 1: GFS STYLE (1D coordinate axes)
-    # ======================================
-    if lat_arr.ndim == 1 and lon_arr.ndim == 1:
-        iy = np.argmin(np.abs(lat_arr - lat))
-        ix = np.argmin(np.abs(lon_arr - lon))
-        return iy, ix
-
-    # ======================================
-    # CASE 2: HRRR STYLE (2D curvilinear grid)
-    # ======================================
-    lat2d, lon2d = lat_arr, lon_arr
-    ny, nx = lat2d.shape
-
-    if ds_id not in _LAST_IJ:
-        dist2 = (lat2d - lat)**2 + (lon2d - lon)**2
-        iy, ix = np.unravel_index(np.argmin(dist2), lat2d.shape)
-        _LAST_IJ[ds_id] = (iy, ix)
-        return iy, ix
-
-    iy0, ix0 = _LAST_IJ[ds_id]
-    r = search_radius
-
-    i_min = max(0, iy0 - r)
-    i_max = min(ny, iy0 + r + 1)
-    j_min = max(0, ix0 - r)
-    j_max = min(nx, ix0 + r + 1)
-
-    sub_lat = lat2d[i_min:i_max, j_min:j_max]
-    sub_lon = lon2d[i_min:i_max, j_min:j_max]
-
-    dist2 = (sub_lat - lat)**2 + (sub_lon - lon)**2
-    sub_iy, sub_ix = np.unravel_index(np.argmin(dist2), dist2.shape)
-
-    iy = i_min + sub_iy
-    ix = j_min + sub_ix
-
-    _LAST_IJ[ds_id] = (iy, ix)
+    '''
     return iy, ix
 
 
-# ===============================
-# Cached array getter
-# ===============================
 def _get_array(ds, var_name):
     key = (id(ds), var_name)
     if key not in _ARRAY_CACHE:
         _ARRAY_CACHE[key] = ds[var_name].values
     return _ARRAY_CACHE[key]
 
-# ===============================
-# Interp
-# ===============================
 def _lerp(v1, p1, v2, p2, p):
     return v1 + (v2 - v1) * (p - p1) / (p2 - p1)
 
-# ===============================
-# Public API
-# ===============================
 def Slice_GFS(lat, lon, alt_m, dt_sec, launch_time_str):
 
     valid_time = _time_from_base(launch_time_str, dt_sec)

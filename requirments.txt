@@ -1,0 +1,7 @@
+herbie-data
+xarray
+cartopy
+line_profiler
+numpy
+matplotlib
+scipy

@@ -5,7 +5,7 @@
 import numpy as np
 from func_lookup import He_density, air_density, air_dynamic_viscosity, Cd_sphere
 from HRRRSlicer import Slice_HRRR
-from GFSSlicer import Slice_GFS
+from GFSSlicer_o import Slice_GFS
 
 from atmosphere import standardAtmosphere
 import matplotlib.pyplot as plt
@@ -64,7 +64,7 @@ class BalloonState:
         self.params = params
         self.init_state()
 
-
+    
     def init_state(self):
 
         p = self.params
@@ -122,6 +122,12 @@ class BalloonState:
         self.F_weight = self.mass * self.g
         self.Net_Lift = self.F_buoyant - self.F_weight 
 
+        self.burst_time = None
+        self.landing_time = None
+
+        self.burst_pos = None
+        self.land_pos = None
+
     def update_state(self,atmosphere):
         # Atmospheric Conditions at current altitude [m]
         P_kPa, T, rho, g = standardAtmosphere.qualities(self.position[2])
@@ -146,6 +152,13 @@ class BalloonState:
         self.F_weight  = self.mass * self.g
         self.Net_Lift  = self.F_buoyant - self.F_weight
 
+    def update_mass(self):
+        p = self.params
+        self.mass = (
+            p["balloon_mass"]/2
+            + p["payload_mass"]
+            + self.parachute_mass
+        )
 
     def report(self):
         
@@ -191,9 +204,9 @@ class AtmosphereState:
 
         dataset= p["DataSet"]
         if  dataset == "gfs":
-            u,v,w,z,T = Slice_GFS(LAT,LONG,ALT_I,0,DT_I)
+            u,v,w,z,T,agl = Slice_GFS(LAT,LONG,ALT_I,0,DT_I)
         elif dataset == "hrrr":
-            u,v,w,z,T = Slice_HRRR(LAT,LONG,ALT_I,0,DT_I)
+            u,v,w,z,T,agl = Slice_HRRR(LAT,LONG,ALT_I,0,DT_I)
         else:
             print("No Dataset Selected")
 
@@ -202,18 +215,22 @@ class AtmosphereState:
         self.wvel = w
         self.gh = z
         self.temp = T
+        self.agl = agl
 
         
     
-    def sample_update(self,LAT,LONG,ALT,dt):
+    def sample_update(self,balloon):
+
+        LAT,LONG,ALT,dt=balloon.lat,balloon.long,balloon.position[2],balloon.t_sim
         p = self.params
         DT_I = p["launch_time"]
+        
 
         dataset= p["DataSet"]
         if  dataset == "gfs":
-            u,v,w,z,T = Slice_GFS(LAT,LONG,ALT,0,DT_I)
+            u,v,w,z,T,agl = Slice_GFS(LAT,LONG,ALT,dt,DT_I)
         elif dataset == "hrrr":
-            u,v,w,z,T = Slice_HRRR(LAT,LONG,ALT,0,DT_I)
+            u,v,w,z,T,agl = Slice_HRRR(LAT,LONG,ALT,dt,DT_I)
         
 
         self.uvel = u
@@ -221,7 +238,7 @@ class AtmosphereState:
         self.wvel = w
         self.gh = z
         self.temp = T
-
+        self.agl = agl
 
 def compute_lift(balloon, atm):
     """
@@ -378,13 +395,10 @@ def Simulation(params):
 
     burst_d = balloon.params["burst_diameter"]
 
-    print("Starting Altitude Entered:" , params["altitude"])
-    print("StartingPressure: ATM Model",balloon.P_air)
-    print("Starting Alttitude HRRR:", atmosphere.gh)
+    #print("Starting Altitude Entered:" , params["altitude"])
+    #print("StartingPressure: ATM Model",balloon.P_air)
+    #print("Starting Alttitude HRRR:", atmosphere.gh)
 
-    balloon.report()
-    if balloon.Net_Lift < 0:
-        return
 
     #Ready Simulation to be Ran
     iter_max = balloon.iter_max
@@ -397,6 +411,18 @@ def Simulation(params):
     #Set Initial Coordinates
     lat_0,long_0 = balloon.params["latitude"],balloon.params["longitude"]
     coord_log= np.array([lat_0,long_0,balloon.params["altitude"]])
+
+    #balloon.report()
+    if balloon.Net_Lift < 0:
+        balloon.burst_time = 0
+        balloon.landing_time = 0
+
+        balloon.burst_pos = np.array([lat_0,long_0,balloon.params["altitude"]])
+        balloon.land_pos = np.array([lat_0,long_0,balloon.params["altitude"]])
+        
+        print("[Simulation Failed]: Lift < 0")
+        return balloon
+
     #Set Initial Velocity
     vel_log = np.array(balloon.velocity)
 
@@ -404,7 +430,7 @@ def Simulation(params):
     time_i = time.time()
     #Ascent
     for iter in range(1,iter_max):
-        if balloon.diameter > burst_d:
+        if balloon.diameter > burst_d :
             break
         
         #Compute Current Set of Forces
@@ -429,31 +455,32 @@ def Simulation(params):
 
         #Recompute Atmospheric Conditions
         balloon.t_sim = iter* balloon.timestep
-        atmosphere.sample_update(balloon.lat,balloon.long,balloon.position[2],balloon.t_sim)
+        atmosphere.sample_update(balloon)
         balloon.update_state(atmosphere)
 
 
-    print("================Burst Report===================")
-    print("Average Ascent[m/s]:",(balloon.position[2]-balloon.params["altitude"])/balloon.t_sim)
-    print("Max Altitude[m]    :",balloon.position[2])
-    print("Burst Coords       :",balloon.lat,balloon.long)
-    print("Burst Time[s]      :",balloon.t_sim )
-    hr = np.floor(balloon.t_sim/3600)
-    min = np.floor((balloon.t_sim-hr*3600)/60)
-    sec = np.floor((balloon.t_sim-hr*3600-min*60))
-    print("Burst Time[Hr-M-S] :",hr,"-",min,"-",sec)
-    print("Final Pressure[Pa] :",balloon.P_air)
-    print("Final Diameter     :",balloon.diameter)
+    #print("================Burst Report===================")
+    #print("Average Ascent[m/s]:",(balloon.position[2]-balloon.params["altitude"])/balloon.t_sim)
+    #print("Max Altitude[m]    :",balloon.position[2])
+    #print("Burst Coords       :",balloon.lat,balloon.long)
+    #print("Burst Time[s]      :",balloon.t_sim )
+    #hr = np.floor(balloon.t_sim/3600)
+    #min = np.floor((balloon.t_sim-hr*3600)/60)
+    #sec = np.floor((balloon.t_sim-hr*3600-min*60))
+    #print("Burst Time[Hr-M-S] :",hr,"-",min,"-",sec)
+    #print("Final Pressure[Pa] :",balloon.P_air)
+    #print("Final Diameter     :",balloon.diameter)
 
     iter_burst = iter
-    burst_time = balloon.t_sim
-    burst_pos =  balloon.lat,balloon.long,balloon.position[2]
-
+    balloon.burst_time = balloon.t_sim
+    balloon.burst_pos =  balloon.lat,balloon.long,balloon.position[2]
+    balloon.update_mass()
     #Descent
     for iter in range(iter_burst,iter_max):
-        if balloon.position[2] < 1500:
+        if atmosphere.agl < 0:
             break
-        
+        #print(atmosphere.agl)
+
         #Compute Current Set of Forces
         F_net, a_net = compute_fall(balloon,atmosphere)
 
@@ -476,129 +503,27 @@ def Simulation(params):
 
         #Recompute Atmospheric Conditions
         balloon.t_sim = iter* balloon.timestep
-        atmosphere.sample_update(balloon.lat,balloon.long,balloon.position[2],balloon.t_sim)
+        atmosphere.sample_update(balloon)
         balloon.update_state(atmosphere)
 
-    print("==============Landing Report===================")
-    print("Average Descent[m/s] :",(balloon.position[2]-burst_pos[2])/(balloon.t_sim-burst_time))
-    print("Final Altitude[m]    :",balloon.position[2])
-    print("Burst Coords         :",balloon.lat,balloon.long)
-    print("Impact Velocity [m/s]:",balloon.velocity)
-    print("Final Pressure[Pa]   :",balloon.P_air)
-    print("Landing Time[s]      :",balloon.t_sim )
-    hr = np.floor(balloon.t_sim/3600)
-    min = np.floor((balloon.t_sim-hr*3600)/60)
-    sec = np.floor((balloon.t_sim-hr*3600-min*60))
-    print("Burst Time[Hr-M-S]   :",hr,"-",min,"-",sec)
+    #print("==============Landing Report===================")
+    #print("Average Descent[m/s] :",(balloon.position[2]-burst_pos[2])/(balloon.t_sim-burst_time))
+    #print("Final Altitude[m]    :",balloon.position[2])
+    #print("Burst Coords         :",balloon.lat,balloon.long)
+    #print("Impact Velocity [m/s]:",balloon.velocity)
+    #print("Final Pressure[Pa]   :",balloon.P_air)
+    #print("Landing Time[s]      :",balloon.t_sim )
+    #hr = np.floor(balloon.t_sim/3600)
+    #min = np.floor((balloon.t_sim-hr*3600)/60)
+    #sec = np.floor((balloon.t_sim-hr*3600-min*60))
+    #print("Burst Time[Hr-M-S]   :",hr,"-",min,"-",sec)
 
     time_f = time.time()
-    print("Time To Run[s]:",time_f-time_i)
-
-    # Create iteration axis
-    iters = np.arange(pos_log.shape[0])
-    '''
-    # -----------------------
-    # FIGURE
-    # -----------------------
-    fig = plt.figure(figsize=(8, 6))
+    balloon.landing_time = time_f
+    #print("Time To Run[s]:",time_f-time_i)
+    balloon.land_pos =  balloon.lat,balloon.long,balloon.position[2]
     
-    # =======================
-    # ALTITUDE PROFILE
-    # =======================
-    ax1 = fig.add_subplot(2,2, 1)
-    ax1.plot(iters, pos_log[:,2], color="navy", linewidth=2)
-
-    ax1.set_xlabel("Iteration")
-    ax1.set_ylabel("Altitude (m)")
-    ax1.set_title("Vertical Profile")
-    ax1.grid(True)
-    
-
-    # =======================
-    # MAP BACKGROUND (LOCAL)
-    # =======================
-    
-    # ---- Pick map source ----
-    # Mapbox / Stadia replacement for Stamen terrain
-    tiler = cimgt.OSM()
-
-    ax2 = fig.add_subplot(2,1,2, projection=tiler.crs)
-
-    # ---- Compute padded bounds ----
-    lat = coord_log[:,0]
-    lon = coord_log[:,1]
-
-    pad = 0.5  # zoom level padding
-    extent = [
-        lon.min() - pad,
-        lon.max() + pad,
-        lat.min() - pad,
-        lat.max() + pad
-    ]
-    ax2.set_extent(extent, crs=ccrs.PlateCarree())
-
-    # ---- Draw background tiles ----
-    ax2.add_image(tiler, 12)  # zoom 10–14: local scales
-
-    # ---- Overlays ----
-    ax2.add_feature(cfeature.STATES, linewidth=0.5)
-    ax2.add_feature(cfeature.BORDERS, linestyle=":")
-    ax2.coastlines(resolution="10m")
-
-    # ---- Trajectory ----
-    ax2.plot(
-        lon, lat,
-        color="crimson",
-        linewidth=2.5,
-        transform=ccrs.PlateCarree(),
-        label="Trajectory"
-    )
-
-    # ---- Launch marker ----
-    ax2.scatter(
-        lon[0], lat[0],
-        marker="X",
-        color="black",
-        s=80,
-        transform=ccrs.PlateCarree(),
-        label="Launch"
-    )
-
-    # ---- Busrt marker ----
-    ax2.scatter(
-        burst_pos[1], burst_pos[0],
-        marker="X",
-        color="red",
-        s=80,
-        transform=ccrs.PlateCarree(),
-        label="Burst"
-    )
-
-    # ---- Final position ----
-    ax2.scatter(
-        lon[-1], lat[-1],
-        marker="o",
-        color="lime",
-        s=60,
-        transform=ccrs.PlateCarree(),
-        label="Burst / Final"
-    )
-
-    ax2.set_title("Balloon Ground Track (Local Scale Map)")
-    ax2.legend(loc="upper right")
-
-    ax3 = fig.add_subplot(2,2, 2)
-    ax3.plot(iters, vel_log[:,2], color="red", linewidth=2)
-
-    ax3.set_xlabel("Iteration")
-    ax3.set_ylabel("Vertical Velocity [m/s]")
-    ax3.set_title("Vertical Velocity Profile")
-    ax3.grid(True)
-
-    #plt.tight_layout()
-    #plt.show()
-    '''
-    return balloon 
+    return balloon,coord_log
 
 if __name__ == "__main__":
     params = input_parameters()

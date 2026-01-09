@@ -26,13 +26,12 @@ def great_circle_distance(lat1, lon1, lat2, lon2, R=R_EARTH):
     return R * c
 
 
-lat_i = 39.41699
+##Real Balloon Landing
+#lat_i  = 39.417
+#long_i = -101.9234
 
-long_i = -101.9234
+#lat_f  = 39.47775
+#long_f = -101.84932
+#dist= great_circle_distance(lat_i,long_i,lat_f,long_f,R_EARTH)
 
-lat_f = 40.01287
-long_f = -102.60405
-
-dist= great_circle_distance(lat_i,long_i,lat_f,long_f,R_EARTH)
-
-print("Distance from i to f [km]:",dist/1000)
+#print("Distance from i to f [km]:",dist/1000)

@@ -1,4 +1,4 @@
-from GFSSlicer import Slice_GFS,_fetch_slice
+from GFSSlicer_b import Slice_GFS,_fetch_slice
 import time
 from line_profiler import LineProfiler
 
